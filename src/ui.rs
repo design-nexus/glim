@@ -11,14 +11,15 @@ use crate::theme::Theme;
 use crate::util::{human_mib, is_unreachable, short_error, truncate};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    app.navigation.begin(frame.area());
     let theme = &app.theme;
     frame.render_widget(Block::default().style(theme.base()), frame.area());
 
     let area = frame.area();
-    if area.width < 30 || area.height < 10 {
+    if area.width < 30 || area.height < 14 {
         frame.render_widget(
             Paragraph::new(
-                "glim · needs 30×10
+                "glim · needs 30×14
 Resize terminal; q quits",
             )
             .style(theme.base()),
@@ -26,31 +27,81 @@ Resize terminal; q quits",
         );
         return;
     }
-    let logo_h = 1;
-    let footer_h = 2u16;
-    let mid_h = if area.height >= 30 {
-        17
-    } else if area.height >= 24 {
-        12
+    let chrome = chrome(app);
+    let area = chrome.shell(frame, area);
+    let title_h = crate::aurora::title_height(area.height);
+    let footer_h = if area.height >= 26 { 4 } else { 3 };
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(title_h + 3),
+        Constraint::Min(1),
+        Constraint::Length(footer_h),
+    ])
+    .areas(area);
+    let [identity, nav] =
+        Layout::vertical([Constraint::Length(title_h), Constraint::Length(3)]).areas(header);
+    draw_logo(frame, identity, app);
+    app.navigation_bar(frame, nav);
+    let body = crate::aurora::body(body);
+    if body.height < 14 {
+        if app.inspect_focus {
+            app.navigation.details(body, 1);
+            draw_mid(frame, body, app);
+        } else {
+            app.navigation.pane(body, 0);
+            draw_table(frame, body, app);
+            app.navigation.rows(
+                app.table_area,
+                0,
+                app.table_row_offset,
+                app.table_row_height,
+                app.tenants.len().saturating_sub(app.table_row_offset),
+            );
+        }
     } else {
-        9
-    };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(logo_h),
-            Constraint::Length(mid_h),
-            Constraint::Min(6),
-            Constraint::Length(footer_h),
+        let summary_h = if app.inspect_focus {
+            if body.height >= 24 {
+                13
+            } else {
+                body.height / 2
+            }
+        } else if body.height >= 24 {
+            13
+        } else if body.height >= 20 {
+            11
+        } else if body.height >= 14 {
+            8
+        } else {
+            body.height.saturating_sub(4).min(6)
+        };
+        let desired_table_h = if body.height >= 20 {
+            (app.tenants.len() as u16 * 2 + 7).max(9)
+        } else {
+            (app.tenants.len() as u16 + 5).max(5)
+        };
+        let [summary, models, _space] = Layout::vertical([
+            Constraint::Length(summary_h),
+            Constraint::Length(
+                desired_table_h
+                    .min(body.height.saturating_sub(summary_h))
+                    .max(1),
+            ),
+            Constraint::Min(0),
         ])
-        .split(area);
-
-    draw_logo(frame, chunks[0], app);
-    if mid_h > 0 {
-        draw_mid(frame, chunks[1], app);
+        .areas(body);
+        app.navigation.pane(summary, 1);
+        draw_mid(frame, summary, app);
+        app.navigation.pane(models, 0);
+        draw_table(frame, models, app);
+        app.navigation.rows(
+            app.table_area,
+            0,
+            app.table_row_offset,
+            app.table_row_height,
+            app.tenants.len().saturating_sub(app.table_row_offset),
+        );
     }
-    draw_table(frame, chunks[2], app);
-    draw_footer(frame, chunks[3], app);
+    let footer = chrome.footer(frame, footer);
+    draw_footer(frame, footer, app);
 
     match &app.mode {
         Mode::Help => draw_help(frame, app),
@@ -60,40 +111,44 @@ Resize terminal; q quits",
     }
     app.commands.draw(
         frame,
-        crate::app::ACTIONS,
+        &app.command_actions(),
         app.theme.bg,
         app.theme.fg,
         app.theme.accent,
         app.theme.bg_raised,
     );
+    app.draw_navigation(frame);
+}
+
+fn chrome(app: &App) -> crate::aurora::Chrome {
+    let t = &app.theme;
+    crate::aurora::Chrome {
+        base: t.base(),
+        muted: Style::default().fg(t.muted),
+        accent: Style::default().fg(t.accent),
+        data: Style::default().fg(t.cyan),
+        border: Style::default().fg(t.border),
+        deep: t.status(),
+    }
 }
 
 fn draw_logo(frame: &mut Frame, area: Rect, app: &App) {
-    let t = &app.theme;
-    let gpu = &app.snapshot.gpu;
-    let purpose = if area.width >= 80 {
-        "  GPU memory / local inference"
-    } else {
-        ""
-    };
-    let status = if app.last_poll.is_some() {
+    let state = if app.last_poll.is_some() {
         "● online"
     } else {
         "○ waiting"
     };
-    let label = if gpu.name.is_empty() {
-        "no GPU".to_owned()
-    } else {
-        short_gpu(&gpu.name)
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" glim", Style::default().fg(t.accent)),
-            Span::styled(purpose, Style::default().fg(t.muted)),
-            Span::styled(format!("  {status}  {label}"), Style::default().fg(t.green)),
-        ]))
-        .style(t.base()),
+    chrome(app).title(
+        frame,
         area,
+        "glim",
+        "GPU memory / local inference",
+        state,
+        Style::default().fg(if app.last_poll.is_some() {
+            app.theme.green
+        } else {
+            app.theme.muted
+        }),
     );
 }
 
@@ -109,11 +164,47 @@ fn draw_mid(frame: &mut Frame, area: Rect, app: &App) {
         }
         return;
     }
-    let [occupancy, stacks] = Layout::vertical([
-        Constraint::Length(if area.height >= 12 { 8 } else { 4 }),
-        Constraint::Min(3),
+    let roomy = area.height >= 10;
+    let [gpu, _gap, occupancy, _gap2, stacks, _space] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(u16::from(roomy)),
+        Constraint::Length(if area.height >= 6 { 3 } else { 2 }),
+        Constraint::Length(u16::from(roomy)),
+        Constraint::Length(if roomy {
+            6
+        } else {
+            area.height.saturating_sub(4)
+        }),
+        Constraint::Min(0),
     ])
     .areas(area);
+    let device = if app.snapshot.gpu.name.is_empty() {
+        "Waiting for NVIDIA GPU".to_owned()
+    } else {
+        app.snapshot.gpu.name.clone()
+    };
+    let details = format!(
+        "{} · {} °C · {}% compute",
+        human_mib(app.occupancy.total),
+        app.snapshot.gpu.temp_c,
+        app.snapshot.gpu.util_pct
+    );
+    let [label, stats] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(36)]).areas(gpu);
+    frame.render_widget(
+        Paragraph::new(device).style(
+            Style::default()
+                .fg(app.theme.fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        label,
+    );
+    frame.render_widget(
+        Paragraph::new(details)
+            .style(Style::default().fg(app.theme.muted))
+            .alignment(Alignment::Right),
+        stats,
+    );
     draw_vram(frame, occupancy, app, false);
     draw_stack_cards(frame, stacks, app);
 }
@@ -317,114 +408,76 @@ fn mhz(clock: Option<u32>) -> String {
 fn draw_vram(frame: &mut Frame, area: Rect, app: &App, include_cards: bool) {
     let theme = &app.theme;
     let occ = &app.occupancy;
-    let bar_h = 4u16.min(area.height);
-    let split = if include_cards && area.height >= 7 {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(bar_h), Constraint::Min(3)])
-            .split(area)
+    let [heading, bar, legend] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    let used_pct = if occ.total == 0 {
+        0
     } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1)])
-            .split(area)
+        occ.used.saturating_mul(100) / occ.total
     };
-
-    let bar_block = Block::default()
-        .title(Span::styled(" VRAM ", Style::default().fg(theme.magenta)))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border))
-        .style(theme.base());
-    let bar_inner = bar_block.inner(split[0]);
-    frame.render_widget(bar_block, split[0]);
-    if bar_inner.height >= 2 {
-        let lines = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(1)])
-            .split(bar_inner);
-        frame.render_widget(
-            Paragraph::new(stacked_bar(app, lines[0].width as usize)),
-            lines[0],
-        );
-        let budget = app.budget_mib();
-        let used_pct = if occ.total == 0 {
-            0
-        } else {
-            occ.used.saturating_mul(100) / occ.total
-        };
-        let budget_pct = if budget == 0 {
-            0
-        } else {
-            app.tenant_vram().saturating_mul(100) / budget
-        };
-        let over = app.over_budget(0);
-        let used_style = if over {
-            Style::default().fg(theme.red).add_modifier(Modifier::BOLD)
-        } else if used_pct >= 80 {
-            Style::default().fg(theme.yellow)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-        let mut stats = vec![
-            gpu_stat(
-                bar_inner.width,
-                "In use",
-                &format!(
-                    "{} / {}  {}%",
-                    human_mib(occ.used),
-                    human_mib(occ.total),
-                    used_pct
-                ),
-                theme,
-                used_style,
-            ),
-            gpu_stat(
-                bar_inner.width,
-                "Budget",
-                &format!("{}  {}%", human_mib(budget), budget_pct),
-                theme,
-                if over {
-                    Style::default().fg(theme.red)
-                } else {
-                    Style::default().fg(theme.green)
-                },
-            ),
-            gpu_stat(
-                bar_inner.width,
-                "Ollama",
-                &human_mib(occ.ollama),
-                theme,
-                Style::default().fg(theme.cyan),
-            ),
-            gpu_stat(
-                bar_inner.width,
-                "LM Studio",
-                &human_mib(occ.lmstudio),
-                theme,
-                Style::default().fg(theme.magenta),
-            ),
-            gpu_stat(
-                bar_inner.width,
-                "Other",
-                &human_mib(occ.other),
-                theme,
-                Style::default().fg(theme.yellow),
-            ),
-            gpu_stat(
-                bar_inner.width,
-                "Free",
-                &human_mib(occ.free),
-                theme,
-                Style::default().fg(theme.muted),
-            ),
-        ];
-        let show = lines[1].height as usize;
-        stats.truncate(show.max(1));
-        frame.render_widget(Paragraph::new(stats), lines[1]);
+    let title_style = if app.over_budget(0) {
+        Style::default().fg(theme.red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.fg)
+    };
+    let [label, value] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(26)]).areas(heading);
+    frame.render_widget(
+        Paragraph::new("VRAM occupancy").style(Style::default().fg(theme.muted)),
+        label,
+    );
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{} / {}  {}%",
+            display_mib(occ.used),
+            human_mib(occ.total),
+            used_pct
+        ))
+        .style(title_style)
+        .alignment(Alignment::Right),
+        value,
+    );
+    frame.render_widget(Paragraph::new(stacked_bar(app, bar.width as usize)), bar);
+    let mut spans = vec![
+        Span::styled("■ ", Style::default().fg(theme.cyan)),
+        Span::styled(
+            format!("Ollama {}  ", human_mib(occ.ollama)),
+            Style::default().fg(theme.fg),
+        ),
+    ];
+    if occ.lmstudio > 0 {
+        spans.push(Span::styled("■ ", Style::default().fg(theme.magenta)));
+        spans.push(Span::styled(
+            format!("LM Studio {}  ", human_mib(occ.lmstudio)),
+            Style::default().fg(theme.fg),
+        ));
     }
+    spans.push(Span::styled("■ ", Style::default().fg(theme.accent)));
+    spans.push(Span::styled(
+        format!("Other {}", human_mib(occ.other)),
+        Style::default().fg(theme.fg),
+    ));
+    let [key, free] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(15)]).areas(legend);
+    frame.render_widget(Paragraph::new(Line::from(spans)), key);
+    frame.render_widget(
+        Paragraph::new(format!("Free {}", human_mib(occ.free)))
+            .style(Style::default().fg(theme.muted))
+            .alignment(Alignment::Right),
+        free,
+    );
+    let _ = include_cards;
+}
 
-    if include_cards && split.len() > 1 && split[1].height >= 3 {
-        draw_stack_cards(frame, split[1], app);
+fn display_mib(mib: u64) -> String {
+    if mib >= 1024 {
+        format!("{:.1} GiB", mib as f64 / 1024.0)
+    } else {
+        human_mib(mib)
     }
 }
 
@@ -454,268 +507,149 @@ fn stacked_bar(app: &App, width: usize) -> Line<'static> {
             n
         };
         if n > 0 {
-            cells.push(Span::styled("█".repeat(n), Style::default().fg(*color)));
+            cells.push(Span::styled(" ".repeat(n), Style::default().bg(*color)));
         }
     }
     Line::from(cells)
 }
 
 fn draw_stack_cards(frame: &mut Frame, area: Rect, app: &App) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(34),
-            Constraint::Percentage(32),
-        ])
-        .split(area);
-    let theme = &app.theme;
-    let total = app.occupancy.total.max(1);
-    let share = |mib: u64| format!("{}  {}%", human_mib(mib), mib.saturating_mul(100) / total);
-    let selected = app.selected_tenant().map(|t| t.stack);
-
-    let ollama_n = app
-        .tenants
-        .iter()
-        .filter(|t| t.stack == Stack::Ollama)
-        .count();
-    let ollama_online = app.snapshot.ollama_online;
-    let ollama_host = app
-        .config
-        .host()
-        .trim_start_matches("http://")
-        .trim_start_matches("https://")
-        .to_string();
-    let mut ollama_stats = vec![
+    let [ollama, _gutter, studio] = Layout::horizontal([
+        Constraint::Ratio(1, 2),
+        Constraint::Length(3),
+        Constraint::Ratio(1, 2),
+    ])
+    .areas(area);
+    let t = &app.theme;
+    for (slot, name, stack, online, app_running, memory, key) in [
         (
-            "Status",
-            if ollama_online {
-                "online".into()
+            ollama,
+            "Ollama",
+            Stack::Ollama,
+            app.snapshot.ollama_online,
+            app.snapshot.ollama_online,
+            app.occupancy.ollama,
+            "o",
+        ),
+        (
+            studio,
+            "LM Studio",
+            Stack::LmStudio,
+            app.snapshot.lms_online,
+            app.snapshot.lms_app,
+            app.occupancy.lmstudio,
+            "m",
+        ),
+    ] {
+        let block = Block::default()
+            .borders(if area.height >= 3 {
+                Borders::TOP
             } else {
-                "offline".into()
-            },
-            Style::default().fg(if ollama_online {
-                theme.green
-            } else {
-                theme.red
-            }),
-        ),
-        (
-            "Models",
-            ollama_n.to_string(),
-            Style::default().fg(theme.fg),
-        ),
-        (
-            "VRAM",
-            share(app.occupancy.ollama),
-            Style::default().fg(theme.cyan),
-        ),
-        ("Host", ollama_host, Style::default().fg(theme.fg_dim)),
-    ];
-    if let Some(model) = app.tenants.iter().find(|t| t.stack == Stack::Ollama) {
-        ollama_stats.push(("Loaded", model.name.clone(), Style::default().fg(theme.fg)));
-    }
-
-    let lms_n = app
-        .tenants
-        .iter()
-        .filter(|t| t.stack == Stack::LmStudio)
-        .count();
-    let (lms_host, lms_pid) = match &app.snapshot.lms_daemon {
-        Some(d) => (d.host.clone(), d.pid.to_string()),
-        None => ("—".into(), "—".into()),
-    };
-    let lms_port = if app.snapshot.lms_server_port > 0 {
-        app.snapshot.lms_server_port.to_string()
-    } else {
-        app.snapshot
-            .lms_daemon
-            .as_ref()
-            .map(|d| d.port.to_string())
-            .unwrap_or_else(|| "—".into())
-    };
-    let lms_alive = app.snapshot.lms_online;
-    let mut lms_stats = vec![
-        (
-            "Status",
-            if lms_alive {
-                "online".into()
-            } else {
-                "offline".into()
-            },
-            Style::default().fg(if lms_alive { theme.green } else { theme.red }),
-        ),
-        (
-            "App",
-            if app.snapshot.lms_app {
-                "running".into()
-            } else {
-                "stopped".into()
-            },
-            Style::default().fg(if app.snapshot.lms_app {
-                theme.green
-            } else {
-                theme.muted
-            }),
-        ),
-        (
-            "Server",
-            if lms_alive {
-                "running".into()
-            } else {
-                "stopped".into()
-            },
-            Style::default().fg(if lms_alive { theme.green } else { theme.red }),
-        ),
-        ("Models", lms_n.to_string(), Style::default().fg(theme.fg)),
-        (
-            "VRAM",
-            share(app.occupancy.lmstudio),
-            Style::default().fg(theme.magenta),
-        ),
-        ("Host", lms_host, Style::default().fg(theme.fg_dim)),
-        ("Port", lms_port, Style::default().fg(theme.fg_dim)),
-        ("PID", lms_pid, Style::default().fg(theme.fg_dim)),
-    ];
-    if let Some(model) = app.tenants.iter().find(|t| t.stack == Stack::LmStudio) {
-        lms_stats.push(("Loaded", model.name.clone(), Style::default().fg(theme.fg)));
-    }
-
-    let orphans: Vec<&Tenant> = app
-        .tenants
-        .iter()
-        .filter(|t| t.stack == Stack::Orphan)
-        .collect();
-    let orphan_n = orphans.len();
-    let orphan_style = if orphan_n > 0 {
-        if app.blink_on() {
-            Style::default().fg(theme.red)
+                Borders::NONE
+            })
+            .border_style(Style::default().fg(t.border))
+            .padding(ratatui::widgets::Padding::new(
+                0,
+                0,
+                u16::from(area.height >= 5),
+                0,
+            ));
+        let inner = block.inner(slot);
+        frame.render_widget(block, slot);
+        let n = app
+            .tenants
+            .iter()
+            .filter(|tenant| tenant.stack == stack)
+            .count();
+        let compact = area.width < 76;
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled(
+                    format!("{name}  "),
+                    Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    if app_running {
+                        "● running"
+                    } else {
+                        "○ stopped"
+                    },
+                    Style::default().fg(if app_running { t.green } else { t.muted }),
+                ),
+                Span::styled(
+                    if stack == Stack::LmStudio && app_running != online {
+                        " · API offline"
+                    } else {
+                        ""
+                    },
+                    Style::default().fg(t.muted),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    if compact {
+                        format!("{n} models")
+                    } else if n == 0 {
+                        "No models loaded".into()
+                    } else {
+                        format!("{n} models loaded")
+                    },
+                    Style::default().fg(t.muted),
+                ),
+                Span::styled(format!("   ({key}) "), Style::default().fg(t.accent)),
+                Span::styled(
+                    if online { "stop" } else { "start" },
+                    Style::default().fg(t.muted),
+                ),
+            ]),
+        ];
+        let share = memory.saturating_mul(100) / app.occupancy.total.max(1);
+        let host = if stack == Stack::Ollama {
+            app.config
+                .host()
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .to_string()
         } else {
-            Style::default().fg(theme.yellow)
-        }
-    } else {
-        Style::default().fg(theme.green)
-    };
-    let mut orphan_stats = vec![
-        (
-            "Status",
-            if orphan_n == 0 {
-                "none".into()
+            let daemon = app.snapshot.lms_daemon.as_ref();
+            let port = if app.snapshot.lms_server_port > 0 {
+                app.snapshot.lms_server_port.to_string()
             } else {
-                "loose".into()
-            },
-            orphan_style,
-        ),
-        (
-            "Processes",
-            orphan_n.to_string(),
-            Style::default().fg(theme.fg),
-        ),
-        (
-            "VRAM",
-            share(app.occupancy.other),
-            Style::default().fg(theme.yellow),
-        ),
-    ];
-    if let Some(orphan) = orphans.first() {
-        orphan_stats.push(("Name", orphan.name.clone(), Style::default().fg(theme.fg)));
-        orphan_stats.push((
-            "PID",
-            orphan
-                .pid
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "—".into()),
-            Style::default().fg(theme.fg_dim),
-        ));
+                daemon
+                    .map(|d| d.port.to_string())
+                    .unwrap_or_else(|| "—".into())
+            };
+            format!("{}:{port}", daemon.map(|d| d.host.as_str()).unwrap_or("—"))
+        };
+        let endpoint = if stack == Stack::LmStudio {
+            format!(
+                "{} · API {} · {host}",
+                human_mib(memory),
+                if online { "online" } else { "offline" }
+            )
+        } else {
+            format!("{} · {share}% · {host}", human_mib(memory))
+        };
+        if !compact {
+            lines.push(Line::from(Span::styled(
+                endpoint,
+                Style::default().fg(t.muted),
+            )));
+        }
+        if stack == Stack::LmStudio && !compact {
+            if let Some(daemon) = &app.snapshot.lms_daemon {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "API {} · PID {}",
+                        if online { "online" } else { "offline" },
+                        daemon.pid
+                    ),
+                    Style::default().fg(t.muted),
+                )));
+            }
+        }
+        frame.render_widget(Paragraph::new(lines), inner);
     }
-
-    stack_card(
-        frame,
-        cols[0],
-        app,
-        " OLLAMA ",
-        app.theme.cyan,
-        selected == Some(Stack::Ollama),
-        ollama_stats,
-        "o",
-        if ollama_online { "stop" } else { "start" },
-    );
-    stack_card(
-        frame,
-        cols[1],
-        app,
-        " LM STUDIO ",
-        app.theme.magenta,
-        selected == Some(Stack::LmStudio),
-        lms_stats,
-        "m",
-        if lms_alive { "stop" } else { "start" },
-    );
-    stack_card(
-        frame,
-        cols[2],
-        app,
-        " ORPHANS ",
-        app.theme.red,
-        selected == Some(Stack::Orphan),
-        orphan_stats,
-        "x",
-        "kill selected",
-    );
-}
-
-fn stack_card(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    title: &str,
-    accent: Color,
-    focused: bool,
-    stats: Vec<(&str, String, Style)>,
-    hotkey: &str,
-    hotkey_label: &str,
-) {
-    let theme = &app.theme;
-    let border = if focused { accent } else { theme.border };
-    let block = Block::default()
-        .title(Span::styled(title, Style::default().fg(accent)))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border))
-        .style(theme.base());
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    let body_h = inner.height.saturating_sub(1);
-    let split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(body_h.max(1)), Constraint::Length(1)])
-        .split(inner);
-
-    let show = split[0].height as usize;
-    let lines: Vec<Line> = stats
-        .into_iter()
-        .take(show)
-        .map(|(label, value, style)| gpu_stat(split[0].width, label, &value, theme, style))
-        .collect();
-    frame.render_widget(Paragraph::new(lines), split[0]);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!("({hotkey})"),
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  {hotkey_label}"),
-                Style::default().fg(theme.muted),
-            ),
-        ])),
-        split[1],
-    );
 }
 
 fn draw_inspector(frame: &mut Frame, area: Rect, app: &App) {
@@ -819,7 +753,7 @@ fn draw_inspector(frame: &mut Frame, area: Rect, app: &App) {
 
 fn kv(theme: &Theme, key: &str, value: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("{key:<6}",), Style::default().fg(theme.muted)),
+        Span::styled(format!("{key:<9}",), Style::default().fg(theme.muted)),
         Span::styled(value.to_string(), Style::default().fg(theme.fg)),
     ])
 }
@@ -836,27 +770,41 @@ fn hint_for(tenant: &Tenant) -> &'static str {
 
 fn draw_table(frame: &mut Frame, area: Rect, app: &mut App) {
     let theme = &app.theme;
+    let roomy = area.height >= 9;
     let block = Block::default()
-        .title(Span::styled(
-            " Loaded models / GPU processes ",
-            Style::default().fg(theme.accent),
-        ))
         .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .border_style(Style::default().fg(if app.inspect_focus {
             theme.border
         } else {
             theme.accent
         }))
+        .padding(ratatui::widgets::Padding::horizontal(1))
         .style(theme.base());
     let inner = block.inner(area);
     frame.render_widget(block, area);
-
-    app.table_area = Rect {
-        x: inner.x,
-        y: inner.y.saturating_add(1),
-        width: inner.width,
-        height: inner.height.saturating_sub(1),
-    };
+    let [heading, inner] = Layout::vertical([
+        Constraint::Length(if roomy { 2 } else { 1 }),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                if app.inspect_focus {
+                    "GPU process details "
+                } else {
+                    "Loaded models "
+                },
+                Style::default().fg(theme.accent),
+            ),
+            Span::styled(
+                app.tenants.len().to_string(),
+                Style::default().fg(theme.muted),
+            ),
+        ])),
+        heading,
+    );
 
     if app.tenants.is_empty() {
         let empty = vec![
@@ -884,8 +832,20 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
-    let wide = inner.width >= 92;
-    let medium = inner.width >= 72;
+    let [table_area, note_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(if roomy { 2 } else { 0 }),
+    ])
+    .areas(inner);
+    app.table_area = Rect {
+        x: table_area.x,
+        y: table_area.y.saturating_add(1),
+        width: table_area.width,
+        height: table_area.height.saturating_sub(1),
+    };
+
+    let wide = app.inspect_focus && inner.width >= 92;
+    let medium = app.inspect_focus && inner.width >= 72;
     let header = if wide {
         Row::new([
             "STACK", "MODEL", "QUANT", "VRAM", "SHARE", "CTX", "TTL", "PID",
@@ -902,7 +862,7 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Row::new(["STACK", "MODEL", "VRAM", "TTL"]).style(
+        Row::new(["Model", "Stack", "VRAM", "State"]).style(
             Style::default()
                 .fg(theme.muted)
                 .add_modifier(Modifier::BOLD),
@@ -926,7 +886,19 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &mut App) {
         if wide {
             Row::new(vec![
                 Cell::from(Span::styled(t.stack.label().to_string(), stack_style)),
-                Cell::from(t.name.clone()),
+                Cell::from(Span::styled(
+                    t.name.clone(),
+                    Style::default().fg(
+                        if app
+                            .selected_tenant()
+                            .is_some_and(|selected| selected.key == t.key)
+                        {
+                            theme.accent
+                        } else {
+                            theme.fg
+                        },
+                    ),
+                )),
                 Cell::from(Span::styled(quant, Style::default().fg(theme.fg_dim))),
                 Cell::from(Span::styled(
                     human_mib(t.vram_mib),
@@ -937,13 +909,32 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &mut App) {
                     Style::default().fg(stack_color(theme, t.stack)),
                 )),
                 Cell::from(ctx),
-                Cell::from(t.status.clone()),
+                Cell::from(Span::styled(
+                    t.status.clone(),
+                    Style::default().fg(if t.status == "loaded" {
+                        theme.green
+                    } else {
+                        theme.fg
+                    }),
+                )),
                 Cell::from(pid),
             ])
         } else if medium {
             Row::new(vec![
                 Cell::from(Span::styled(t.stack.label().to_string(), stack_style)),
-                Cell::from(t.name.clone()),
+                Cell::from(Span::styled(
+                    t.name.clone(),
+                    Style::default().fg(
+                        if app
+                            .selected_tenant()
+                            .is_some_and(|selected| selected.key == t.key)
+                        {
+                            theme.accent
+                        } else {
+                            theme.fg
+                        },
+                    ),
+                )),
                 Cell::from(Span::styled(
                     human_mib(t.vram_mib),
                     Style::default().fg(theme.accent),
@@ -952,15 +943,41 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &mut App) {
                     share,
                     Style::default().fg(stack_color(theme, t.stack)),
                 )),
-                Cell::from(t.status.clone()),
+                Cell::from(Span::styled(
+                    t.status.clone(),
+                    Style::default().fg(if t.status == "loaded" {
+                        theme.green
+                    } else {
+                        theme.fg
+                    }),
+                )),
                 Cell::from(pid),
             ])
         } else {
             Row::new(vec![
+                Cell::from(Span::styled(
+                    t.name.clone(),
+                    Style::default().fg(
+                        if app
+                            .selected_tenant()
+                            .is_some_and(|selected| selected.key == t.key)
+                        {
+                            theme.accent
+                        } else {
+                            theme.fg
+                        },
+                    ),
+                )),
                 Cell::from(Span::styled(t.stack.label().to_string(), stack_style)),
-                Cell::from(t.name.clone()),
                 Cell::from(human_mib(t.vram_mib)),
-                Cell::from(t.status.clone()),
+                Cell::from(Span::styled(
+                    t.status.clone(),
+                    Style::default().fg(if t.status == "loaded" {
+                        theme.green
+                    } else {
+                        theme.fg
+                    }),
+                )),
             ])
         }
     });
@@ -987,20 +1004,60 @@ fn draw_table(frame: &mut Frame, area: Rect, app: &mut App) {
         ]
     } else {
         vec![
-            Constraint::Length(9),
-            Constraint::Min(12),
-            Constraint::Length(7),
-            Constraint::Length(8),
+            Constraint::Percentage(42),
+            Constraint::Percentage(22),
+            Constraint::Percentage(20),
+            Constraint::Percentage(16),
         ]
     };
 
+    let row_height = if roomy && !app.inspect_focus { 2 } else { 1 };
+    let rows = rows.map(|row| row.height(row_height));
     let table = Table::new(rows, widths)
         .header(header)
-        .row_highlight_style(theme.selected())
+        .highlight_symbol("▸ ")
+        .row_highlight_style(Style::default().bg(theme.selection))
         .style(theme.base());
     let mut state = ratatui::widgets::TableState::default();
     state.select(Some(app.selected));
-    frame.render_stateful_widget(table, inner, &mut state);
+    frame.render_stateful_widget(table, table_area, &mut state);
+    app.table_row_height = row_height;
+    app.table_row_offset = state.offset();
+    let mut note = vec![Span::styled(
+        app.tenants
+            .get(app.selected)
+            .map(|t| format!("Selected {} · ", t.name))
+            .unwrap_or_else(|| "Select a model to inspect its details".into()),
+        Style::default().fg(theme.muted),
+    )];
+    if let Some(tenant) = app.selected_tenant() {
+        match tenant.kind {
+            crate::app::TenantKind::OllamaModel | crate::app::TenantKind::LmsModel => note.extend(
+                crate::aurora::shortcut_line(
+                    &[("u", "unload"), ("U", "unload stack"), ("p", "park other")],
+                    Style::default().fg(theme.accent),
+                    Style::default().fg(theme.muted),
+                )
+                .spans,
+            ),
+            crate::app::TenantKind::Orphan => note.extend(
+                crate::aurora::shortcut_line(
+                    &[("x", "kill orphan (confirm)")],
+                    Style::default().fg(theme.accent),
+                    Style::default().fg(theme.muted),
+                )
+                .spans,
+            ),
+            crate::app::TenantKind::Process => note.push(Span::styled(
+                hint_for(tenant),
+                Style::default().fg(theme.muted),
+            )),
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(note)).style(theme.base()),
+        note_area,
+    );
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
@@ -1010,37 +1067,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         .constraints([Constraint::Length(1), Constraint::Length(1)])
         .split(area);
 
-    let keys = if area.width < 90 {
-        Line::from(Span::styled(
-            if app.inspect_focus {
-                "Tab pane  j/k scroll  ^K actions  ? help  q quit"
-            } else {
-                "Tab pane  j/k move  ^K actions  ? help  q quit"
-            },
-            Style::default().fg(theme.accent),
-        ))
-    } else {
-        Line::from({
-            let mut spans = vec![Span::raw(" ")];
-            for (key, label) in [
-                ("j/k", "move"),
-                ("u", "unload"),
-                ("Tab", "inspect"),
-                ("^K", "actions"),
-                ("l", "load"),
-                ("r", "refresh"),
-                ("?", "help"),
-                ("q", "quit"),
-            ] {
-                spans.push(keycap(key, theme));
-                spans.push(Span::styled(
-                    format!(" {label}  "),
-                    Style::default().fg(theme.fg_dim),
-                ));
-            }
-            spans
-        })
-    };
+    let keys = crate::navigation::shortcuts(
+        &app.footer_hints(),
+        split[0].width,
+        Style::default().fg(theme.accent),
+        Style::default().fg(theme.muted),
+    );
     frame.render_widget(Paragraph::new(keys).style(theme.status()), split[0]);
 
     let status = match &app.mode {
@@ -1050,7 +1082,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Normal => {
             let age = poll_age(app);
             if app.status.is_empty() {
-                format!("{age}")
+                if age == "live" {
+                    String::new()
+                } else {
+                    age
+                }
             } else {
                 format!("{}   {age}", app.status)
             }
@@ -1108,7 +1144,7 @@ fn draw_help(frame: &mut Frame, app: &App) {
         Line::from("l    load a model onto the focused stack"),
         Line::from("o    start/stop Ollama     m  start/stop LM Studio"),
         Line::from("x    kill selected orphan  r  refresh  ^K actions"),
-        Line::from("Tab  model list / inspector  PgUp/PgDn details"),
+        Line::from("F2 Navigate  F6 model list / inspector  PgUp/PgDn details"),
         Line::from(""),
         Line::from(Span::styled(
             "Polling never starts LM Studio. lms runs only after its daemon pid is alive.",
@@ -1144,6 +1180,25 @@ fn draw_load(frame: &mut Frame, app: &App, ui: &LoadUi) {
         Stack::LmStudio => app.theme.magenta,
         _ => app.theme.accent,
     };
+    app.navigation.clear_hits();
+    let inner = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let capacity = inner.height.saturating_sub(3) as usize;
+    let start = selected.saturating_add(1).saturating_sub(capacity);
+    let list_area = Rect::new(
+        inner.x,
+        inner.y + 3,
+        inner.width,
+        inner.height.saturating_sub(3),
+    );
+    app.navigation
+        .hit(list_area, crate::navigation::Intent::Pane(98));
+    app.navigation
+        .rows(list_area, 98, start, 1, items.len().saturating_sub(start));
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -1175,7 +1230,7 @@ fn draw_load(frame: &mut Frame, app: &App, ui: &LoadUi) {
             Style::default().fg(app.theme.yellow),
         )));
     } else {
-        for (i, item) in items.iter().enumerate() {
+        for (i, item) in items.iter().enumerate().skip(start).take(capacity) {
             let marker = if i == selected { "▸ " } else { "  " };
             let style = if i == selected {
                 app.theme.selected()
@@ -1229,6 +1284,8 @@ fn draw_confirm(frame: &mut Frame, app: &App, confirm: &Confirm) {
             ),
         area,
     );
+    app.navigation
+        .dialog_buttons(frame, area, app.navigation_skin());
 }
 
 fn keycap(key: &str, theme: &Theme) -> Span<'static> {
@@ -1336,6 +1393,7 @@ mod aurora_audit {
         let (tx, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(crate::config::Config::default(), crate::theme::aurora(), tx);
         app.snapshot.gpu.name = "NVIDIA RTX 4080".into();
+        app.snapshot.gpu.util_pct = 38;
         app.snapshot.gpu.total_mib = 16384;
         app.snapshot.gpu.used_mib = 11468;
         app.snapshot.gpu.temp_c = 48;
@@ -1368,6 +1426,127 @@ mod aurora_audit {
         }
         app
     }
+
+    #[tokio::test]
+    async fn common_navigation_contract_preserves_focus_and_drafts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture();
+        app.focus_pane(0);
+        if app.navigation_editing() {
+            let _ = app.on_key(key(KeyCode::Esc));
+        }
+        let screen = app.navigation_screen();
+        let pane = app.focused_pane();
+        let _ = app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            app.navigation_screen(),
+            crate::navigation::step(
+                screen,
+                app.navigation_entries()
+                    .iter()
+                    .filter(|e| matches!(e.target, crate::navigation::Intent::Screen(_)))
+                    .count(),
+                1
+            )
+        );
+        if app.navigation_editing() {
+            let _ = app.on_key(key(KeyCode::Esc));
+        }
+        let _ = app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.navigation_screen(), screen);
+        let _ = app.on_key(key(KeyCode::F(6)));
+        assert_eq!(
+            app.focused_pane(),
+            crate::navigation::step(pane, app.pane_names().len(), 1)
+        );
+        let _ = app.on_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::SHIFT));
+        assert_eq!(app.focused_pane(), pane);
+        let _ = app.on_key(key(KeyCode::F(2)));
+        assert!(app.navigation.open);
+        let _ = app.on_key(key(KeyCode::Char('1')));
+        assert!(!app.navigation.open);
+        assert_eq!(app.navigation_screen(), 0);
+        app.select_screen(screen);
+        let _ = app.on_key(key(KeyCode::F(2)));
+        assert!(app.navigation.open);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        assert!(crate::audit::text(terminal.backend().buffer()).contains("Navigate"));
+        let _ = app.on_key(key(KeyCode::Esc));
+        assert!(!app.navigation.open);
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut hit = None;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width.saturating_sub(3) {
+                if buffer[(x, y)].symbol() == "("
+                    && buffer[(x + 1, y)].symbol() == "F"
+                    && buffer[(x + 2, y)].symbol() == "2"
+                {
+                    hit = Some((x, y));
+                    break;
+                }
+            }
+            if hit.is_some() {
+                break;
+            }
+        }
+        let (x, y) = hit.expect("visible clickable navigation");
+        app.navigation_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.navigation.open);
+        let _ = app.on_key(key(KeyCode::Esc));
+
+        let _ = app.on_key(commands());
+        assert!(app.commands.open);
+        let _ = app.on_key(key(KeyCode::Esc));
+    }
+    #[tokio::test]
+    async fn all_screens_and_focus_targets_fit_the_navigation_matrix() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture();
+        let screens = app
+            .navigation_entries()
+            .iter()
+            .filter(|e| matches!(e.target, crate::navigation::Intent::Screen(_)))
+            .count();
+        for screen in 0..screens {
+            app.select_screen(screen);
+            for pane in 0..app.pane_names().len() {
+                app.focus_pane(pane);
+                for &(w, h) in &crate::audit::SIZES[..4] {
+                    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                    terminal.draw(|f| draw(f, &mut app)).unwrap();
+                    let buffer = terminal.backend().buffer();
+                    assert!(
+                        crate::audit::text(buffer).contains("(F2)"),
+                        "screen {screen} pane {pane} must expose navigation at {w}x{h}"
+                    );
+                    crate::audit::verify_footer(buffer);
+                    crate::audit::capture(
+                        "glim",
+                        &format!("navigation-screen{screen}-pane{pane}"),
+                        buffer,
+                    );
+                    let before = app.navigation_screen();
+                    app.navigation_mouse(crossterm::event::MouseEvent {
+                        kind: crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Left,
+                        ),
+                        column: w + 1,
+                        row: h + 1,
+                        modifiers: KeyModifiers::NONE,
+                    });
+                    assert_eq!(app.navigation_screen(), before);
+                }
+            }
+        }
+    }
     #[test]
     fn dialogs_own_commands_and_kill_still_confirms() {
         let mut app = fixture();
@@ -1383,6 +1562,29 @@ mod aurora_audit {
         assert!(app.commands.open);
         app.on_key(key(KeyCode::Char('u')));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+    #[test]
+    #[ignore = "interactive mock fixture for visual QA"]
+    fn live_preview() {
+        let mut app = fixture();
+        match std::env::var("AURORA_NAV_PREVIEW").as_deref() {
+            Ok("menu") => app.navigation.toggle(),
+            Ok("actions") => app.commands.open = true,
+            Ok("focused") => app.focus_pane(1),
+            _ => {}
+        }
+        crate::audit::live_preview(
+            &mut app,
+            |f, a| draw(f, a),
+            |a, k| {
+                if matches!(
+                    k.code,
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up | KeyCode::Esc
+                ) {
+                    a.on_key(k);
+                }
+            },
+        );
     }
     #[test]
     fn responsive_render_matrix() {
@@ -1405,9 +1607,13 @@ mod aurora_audit {
             let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
             term.draw(|f| draw(f, &mut app)).unwrap();
             let buffer = term.backend().buffer();
-            if w >= 30 && h >= 10 {
-                assert!(crate::audit::text(buffer).contains("glim"));
+            if w >= 30 && h >= 14 {
+                assert!(buffer
+                    .content
+                    .iter()
+                    .any(|cell| matches!(cell.symbol(), "█" | "▀" | "▄")));
             }
+            crate::audit::verify_footer(buffer);
             crate::audit::capture("glim", "main", buffer);
         }
         app.inspect_focus = true;
@@ -1433,6 +1639,7 @@ mod aurora_audit {
         for &(w, h) in &crate::audit::SIZES[..4] {
             let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
             term.draw(|f| draw(f, &mut app)).unwrap();
+            crate::audit::verify_footer(term.backend().buffer());
             crate::audit::capture("glim", "offline", term.backend().buffer());
         }
     }

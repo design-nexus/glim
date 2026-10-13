@@ -21,14 +21,14 @@ This is not a chat UI and not a bar plugin.
 | `o` | Start or stop Ollama |
 | `m` | Start or stop the LM Studio server |
 | `x` | Kill the selected orphan (confirm) |
-| `Tab` | Toggle model list / inspector |
+| `F6` / `Shift+F6` | Cycle model list / inspector |
 | `Ctrl+K` | Search actions and select a theme |
 | `?` | Help |
 | `q` | Quit |
 
 Click a tenant row to select it. Scroll the wheel to move.
 
-A compact Glim header sits above the VRAM occupancy meter, stack cards, and model list. Tab opens the scrollable inspector.
+A compact Glim header sits above the VRAM occupancy meter, stack cards, and model list. F6 focuses the scrollable inspector.
 
 ## Safety
 
@@ -60,6 +60,10 @@ glim
 
 ## Aurora interface
 
-New installations use Aurora: charcoal surfaces, lavender focus, cyan data, quiet borders, and compact headers. Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab changes focus where panes are available. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×10.
+New installations use Aurora: charcoal surfaces, lavender focus, cyan data, quiet borders, and compact headers. Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab / Shift+Tab changes screens; F6 / Shift+F6 changes panes. F2 opens Navigation. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×14.
 
 Build requirements: Rust 1.88 or newer, Ratatui 0.30.2, Crossterm 0.29. Run `cargo test --locked` before `./install.sh`. The command is `glim`; no compatibility command aliases are installed.
+
+See [shared navigation](docs/navigation.md) for keyboard and mouse controls.
+
+Screenshot refreshed from an actual Foot render with sample data.

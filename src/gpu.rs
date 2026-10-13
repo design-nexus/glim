@@ -49,6 +49,9 @@ pub fn sample() -> (Gpu, Vec<ComputeApp>) {
             ..Gpu::default()
         },
     };
+    if gpu.error.is_some() {
+        return (gpu, Vec::new());
+    }
     let apps = match Command::new("nvidia-smi")
         .args([
             "--query-compute-apps=pid,process_name,used_gpu_memory",
@@ -175,17 +178,34 @@ fn parse_opt_u32(text: &str) -> Option<u32> {
 }
 
 fn stderr_or(output: &std::process::Output, fallback: &str) -> String {
-    let text = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if text.is_empty() {
-        fallback.into()
-    } else {
-        text
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
     }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        return stdout;
+    }
+    fallback.into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn parses_nvidia_smi_failure_from_stdout() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(18 << 8),
+            stdout: b"Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 615.78\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            stderr_or(&output, "nvidia-smi failed"),
+            "Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 615.78"
+        );
+    }
 
     #[test]
     fn parses_nounits_gpu_row() {

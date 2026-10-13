@@ -121,6 +121,7 @@ pub struct LoadItem {
 }
 
 pub struct App {
+    pub navigation: crate::navigation::State,
     pub inspect_focus: bool,
     pub detail_scroll: u16,
     pub commands: crate::commands::Palette,
@@ -137,6 +138,8 @@ pub struct App {
     pub json_path: PathBuf,
     pub tick: u32,
     pub table_area: Rect,
+    pub table_row_height: u16,
+    pub table_row_offset: usize,
     pub vram_hist: Vec<u64>,
     pub util_hist: Vec<u64>,
     pub last_poll: Option<Instant>,
@@ -157,6 +160,7 @@ impl App {
     pub fn new(config: Config, theme: Theme, tx: UnboundedSender<Bus>) -> Self {
         let lms_path = config.lms_bin();
         Self {
+            navigation: crate::navigation::State::default(),
             commands: crate::commands::Palette::default(),
             inspect_focus: false,
             detail_scroll: 0,
@@ -173,6 +177,8 @@ impl App {
             json_path: lms::default_json_path(),
             tick: 0,
             table_area: Rect::default(),
+            table_row_height: 1,
+            table_row_offset: 0,
             vram_hist: Vec::new(),
             util_hist: Vec::new(),
             last_poll: None,
@@ -310,52 +316,23 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
-        if self.commands.open || !matches!(self.mode, Mode::Normal) {
-            return;
-        }
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                let area = self.table_area;
-                if mouse.column >= area.x
-                    && mouse.column < area.x.saturating_add(area.width)
-                    && mouse.row >= area.y
-                    && mouse.row < area.y.saturating_add(area.height)
-                {
-                    let idx = (mouse.row.saturating_sub(area.y)) as usize;
-                    if idx < self.tenants.len() {
-                        self.selected = idx;
-                    }
-                }
-            }
-            MouseEventKind::ScrollDown => self.move_sel(1),
-            MouseEventKind::ScrollUp => self.move_sel(-1),
-            _ => {}
-        }
+        self.navigation_mouse(mouse);
     }
 
     fn on_normal_key(&mut self, key: KeyEvent) -> bool {
+        if self.navigation_key(key) {
+            return false;
+        }
         if self.commands.open
             || (key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
-            if let Some(action) = self.commands.handle(key, ACTIONS) {
-                if action.modifiers == KeyModifiers::ALT {
-                    let id = match action.key {
-                        KeyCode::Char('o') => "omarchy",
-                        KeyCode::Char('t') => "terminal",
-                        _ => "aurora",
-                    };
-                    self.apply_aurora_theme(id);
-                } else {
-                    return self.on_normal_key(action.event());
-                }
+            let actions = self.command_actions();
+            if let Some(action) = self.commands.handle(key, &actions) {
+                self.dispatch_intent(action.target);
             }
             return false;
         }
 
-        if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
-            self.inspect_focus = !self.inspect_focus;
-            return false;
-        }
         if self.inspect_focus {
             match key.code {
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -378,7 +355,7 @@ impl App {
             }
         }
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return true,
+            KeyCode::Char('q') => return true,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('j') | KeyCode::Down => self.move_sel(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_sel(-1),
@@ -413,6 +390,34 @@ impl App {
         }
     }
 
+    fn submit_load(&mut self) {
+        let (stack, item) = {
+            let Mode::Load(ui) = &self.mode else { return };
+            let items = filtered(ui);
+            let item = items.get(ui.selected).cloned();
+            (ui.stack, item)
+        };
+        if let Some(item) = item {
+            let extra = bytes_to_mib(item.size_bytes);
+            if self.over_budget(extra) {
+                self.mode = Mode::Confirm(Confirm {
+                    prompt: format!(
+                        "Load {} ({} > budget {}M)? y/n",
+                        item.key,
+                        crate::util::human_mib(extra),
+                        self.budget_mib()
+                    ),
+                    action: ConfirmAction::Load {
+                        stack,
+                        key: item.key,
+                    },
+                });
+            } else {
+                self.mode = Mode::Normal;
+                self.load_model(stack, item.key);
+            }
+        }
+    }
     fn on_load_key(&mut self, key: KeyEvent) {
         if !matches!(self.mode, Mode::Load(_)) {
             return;
@@ -440,34 +445,7 @@ impl App {
                     ui.selected = 0;
                 }
             }
-            KeyCode::Enter => {
-                let (stack, item) = {
-                    let Mode::Load(ui) = &self.mode else { return };
-                    let items = filtered(ui);
-                    let item = items.get(ui.selected).cloned();
-                    (ui.stack, item)
-                };
-                if let Some(item) = item {
-                    let extra = bytes_to_mib(item.size_bytes);
-                    if self.over_budget(extra) {
-                        self.mode = Mode::Confirm(Confirm {
-                            prompt: format!(
-                                "Load {} ({} > budget {}M)? y/n",
-                                item.key,
-                                crate::util::human_mib(extra),
-                                self.budget_mib()
-                            ),
-                            action: ConfirmAction::Load {
-                                stack,
-                                key: item.key,
-                            },
-                        });
-                    } else {
-                        self.mode = Mode::Normal;
-                        self.load_model(stack, item.key);
-                    }
-                }
-            }
+            KeyCode::Enter => self.submit_load(),
             KeyCode::Char(ch) => {
                 if let Mode::Load(ui) = &mut self.mode {
                     if !key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1111,3 +1089,5 @@ pub const ACTIONS: &[crate::commands::Action] = &[
     crate::commands::Action::theme("Follow Omarchy theme", 'o'),
     crate::commands::Action::theme("Terminal theme", 't'),
 ];
+
+include!("navigation_impl.rs");

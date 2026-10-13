@@ -1,10 +1,12 @@
 mod app;
 #[cfg(test)]
 mod audit;
+mod aurora;
 mod commands;
 mod config;
 mod gpu;
 mod lms;
+mod navigation;
 mod ollama;
 mod proc;
 mod theme;
@@ -40,7 +42,10 @@ impl Suspended {
 impl Drop for Suspended {
     fn drop(&mut self) {
         let _ = enable_raw_mode();
-        let _ = execute!(stdout(), EnterAlternateScreen, EnableMouseCapture);
+        let _ = execute!(stdout(), EnterAlternateScreen);
+        if !std::env::args().any(|a| a == "--no-mouse") {
+            let _ = execute!(stdout(), EnableMouseCapture);
+        }
     }
 }
 
@@ -60,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     if std::env::args().any(|a| a == "--help" || a == "-h") {
-        println!("Glim — Aurora terminal interface\n\nUsage: glim [--help] [--version]\nCtrl+K actions  ? help  Ctrl+C quit");
+        println!("Glim — Aurora terminal interface\n\nUsage: glim [--help] [--version] [--no-mouse]\nF2 Navigate  F6 panes  Ctrl+K actions  Ctrl+C quit");
         return Ok(());
     }
     let found = theme::find_omarchy();
@@ -89,16 +94,20 @@ async fn main() -> anyhow::Result<()> {
         let _ = execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture);
         previous(info);
     }));
-    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
-        .context("failed to enter the alternate screen")?;
+    execute!(stdout(), EnterAlternateScreen)?;
+    if !std::env::args().any(|a| a == "--no-mouse") {
+        execute!(stdout(), EnableMouseCapture)?;
+    }
+    execute!(stdout()).context("failed to enter the alternate screen")?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut reader = EventStream::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(50));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let status = loop {
-        if let Err(err) = terminal.draw(|frame| ui::draw(frame, &mut app)) {
-            break Err(err).context("drawing the screen");
+        match terminal.draw(|frame| ui::draw(frame, &mut app)) {
+            Ok(rendered) => aurora::paint_wordmark(rendered.buffer)?,
+            Err(err) => break Err(err).context("drawing the screen"),
         }
         if let Some(action) = app.take_service_action() {
             let suspended = Suspended::enter();
