@@ -6,7 +6,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::brand::Logo;
 use crate::config::Config;
 use crate::gpu::{self, ComputeApp, Gpu};
 use crate::lms::{self, Daemon, Installed as LmsInstalled, LoadedModel};
@@ -122,6 +121,9 @@ pub struct LoadItem {
 }
 
 pub struct App {
+    pub inspect_focus: bool,
+    pub detail_scroll: u16,
+    pub commands: crate::commands::Palette,
     pub config: Config,
     pub theme: Theme,
     pub snapshot: Snapshot,
@@ -133,7 +135,6 @@ pub struct App {
     pub service_action: Option<&'static str>,
     pub lms_path: PathBuf,
     pub json_path: PathBuf,
-    pub logo: Logo,
     pub tick: u32,
     pub table_area: Rect,
     pub vram_hist: Vec<u64>,
@@ -143,9 +144,22 @@ pub struct App {
 }
 
 impl App {
+    fn apply_aurora_theme(&mut self, id: &str) {
+        self.config.theme = id.into();
+        let om = crate::theme::find_omarchy().map(|(_, t, _)| t);
+        self.theme = crate::theme::resolve(id, om.as_ref());
+        self.status = format!("Theme: {}", self.theme.name);
+        if let Err(err) = self.config.save() {
+            self.status = format!("Saving theme: {err}");
+        }
+    }
+
     pub fn new(config: Config, theme: Theme, tx: UnboundedSender<Bus>) -> Self {
         let lms_path = config.lms_bin();
         Self {
+            commands: crate::commands::Palette::default(),
+            inspect_focus: false,
+            detail_scroll: 0,
             config,
             theme,
             snapshot: Snapshot::default(),
@@ -157,7 +171,6 @@ impl App {
             service_action: None,
             lms_path,
             json_path: lms::default_json_path(),
-            logo: Logo::new(),
             tick: 0,
             table_area: Rect::default(),
             vram_hist: Vec::new(),
@@ -169,7 +182,6 @@ impl App {
 
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
-        self.logo.step();
     }
 
     pub fn blink_on(&self) -> bool {
@@ -230,7 +242,9 @@ impl App {
             Bus::Error(err) => self.status = err,
             Bus::Theme => {
                 if let Some((_, theme, _)) = crate::theme::find_omarchy() {
-                    self.theme = crate::theme::resolve(Some(&theme));
+                    if self.config.theme == "omarchy" {
+                        self.theme = crate::theme::resolve("omarchy", Some(&theme));
+                    }
                 }
             }
             Bus::Installed { stack, ollama, lms } => {
@@ -296,7 +310,7 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
-        if !matches!(self.mode, Mode::Normal) {
+        if self.commands.open || !matches!(self.mode, Mode::Normal) {
             return;
         }
         match mouse.kind {
@@ -320,16 +334,55 @@ impl App {
     }
 
     fn on_normal_key(&mut self, key: KeyEvent) -> bool {
+        if self.commands.open
+            || (key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            if let Some(action) = self.commands.handle(key, ACTIONS) {
+                if action.modifiers == KeyModifiers::ALT {
+                    let id = match action.key {
+                        KeyCode::Char('o') => "omarchy",
+                        KeyCode::Char('t') => "terminal",
+                        _ => "aurora",
+                    };
+                    self.apply_aurora_theme(id);
+                } else {
+                    return self.on_normal_key(action.event());
+                }
+            }
+            return false;
+        }
+
+        if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
+            self.inspect_focus = !self.inspect_focus;
+            return false;
+        }
+        if self.inspect_focus {
+            match key.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.detail_scroll = self.detail_scroll.saturating_add(1);
+                    return false;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                    return false;
+                }
+                KeyCode::PageDown => {
+                    self.detail_scroll = self.detail_scroll.saturating_add(8);
+                    return false;
+                }
+                KeyCode::PageUp => {
+                    self.detail_scroll = self.detail_scroll.saturating_sub(8);
+                    return false;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('j') | KeyCode::Down => self.move_sel(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_sel(-1),
             KeyCode::Char('r') => self.refresh(),
-            KeyCode::Char('R') => {
-                self.logo.replay();
-                self.status = "Replaying wordmark".into();
-            }
             KeyCode::Char('u') => self.unload_selected(),
             KeyCode::Char('U') => self.unload_all_selected_stack(),
             KeyCode::Char('p') => self.park_other(),
@@ -433,6 +486,7 @@ impl App {
         }
         let next = self.selected as i32 + delta;
         self.selected = next.clamp(0, self.tenants.len() as i32 - 1) as usize;
+        self.detail_scroll = 0;
     }
 
     fn unload_selected(&mut self) {
@@ -659,9 +713,7 @@ impl App {
                 // Ollama loads on first request. Keep a generate keep_alive ping.
                 let host = self.config.host();
                 let model = key.clone();
-                self.spawn_status(async move {
-                    warmup_ollama(&host, &model).await
-                });
+                self.spawn_status(async move { warmup_ollama(&host, &model).await });
             }
             _ => {
                 let bin = self.lms_path.clone();
@@ -869,7 +921,12 @@ pub fn rebuild(app: &mut App) {
         tenants.push(Tenant {
             key: format!("proc:{}", app_gpu.pid),
             stack: Stack::Other,
-            name: app_gpu.name.rsplit('/').next().unwrap_or(&app_gpu.name).to_string(),
+            name: app_gpu
+                .name
+                .rsplit('/')
+                .next()
+                .unwrap_or(&app_gpu.name)
+                .to_string(),
             vram_mib: app_gpu.used_mib,
             share_pct: share(app_gpu.used_mib),
             context: None,
@@ -917,7 +974,10 @@ fn keep_alive(expires: &str) -> String {
         return "loaded".into();
     };
     let now = chrono::Utc::now();
-    let secs = end.with_timezone(&chrono::Utc).signed_duration_since(now).num_seconds();
+    let secs = end
+        .with_timezone(&chrono::Utc)
+        .signed_duration_since(now)
+        .num_seconds();
     if secs <= 0 {
         "expiring".into()
     } else if secs < 60 {
@@ -936,7 +996,9 @@ pub async fn poll_once(config: &Config, json_path: &PathBuf, lms_path: &PathBuf)
         Err(err) => {
             let lower = err.to_ascii_lowercase();
             let online = false;
-            let err = if is_unreachable(&err) || lower.contains("connection") || lower.contains("connect")
+            let err = if is_unreachable(&err)
+                || lower.contains("connection")
+                || lower.contains("connect")
             {
                 None
             } else {
@@ -952,7 +1014,11 @@ pub async fn poll_once(config: &Config, json_path: &PathBuf, lms_path: &PathBuf)
         }
         Err(err) => {
             let daemon = lms::read_daemon_file(json_path);
-            let err = if is_unreachable(&err) { None } else { Some(err) };
+            let err = if is_unreachable(&err) {
+                None
+            } else {
+                Some(err)
+            };
             (daemon, false, false, 0, Vec::new(), err)
         }
     };
@@ -976,7 +1042,8 @@ pub fn spawn_poller(config: Config, tx: UnboundedSender<Bus>) {
     tokio::spawn(async move {
         let json = lms::default_json_path();
         let lms_path = config.lms_bin();
-        let mut interval = tokio::time::interval(Duration::from_millis(config.gpu_poll_ms.max(250)));
+        let mut interval =
+            tokio::time::interval(Duration::from_millis(config.gpu_poll_ms.max(250)));
         loop {
             interval.tick().await;
             let snap = poll_once(&config, &json, &lms_path).await;
@@ -1030,3 +1097,17 @@ mod tests {
         assert_eq!(app.tenants[0].pid, Some(99));
     }
 }
+
+pub const ACTIONS: &[crate::commands::Action] = &[
+    crate::commands::Action::key("Refresh", 'r'),
+    crate::commands::Action::key("Unload selected model", 'u'),
+    crate::commands::Action::key("Load model", 'l'),
+    crate::commands::Action::key("Toggle Ollama", 'o'),
+    crate::commands::Action::key("Toggle LM Studio", 'm'),
+    crate::commands::Action::key("Park other stack", 'p'),
+    crate::commands::Action::key("Kill selected process", 'x'),
+    crate::commands::Action::key("Help", '?'),
+    crate::commands::Action::theme("Aurora theme", 'a'),
+    crate::commands::Action::theme("Follow Omarchy theme", 'o'),
+    crate::commands::Action::theme("Terminal theme", 't'),
+];

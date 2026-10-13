@@ -1,5 +1,7 @@
 mod app;
-mod brand;
+#[cfg(test)]
+mod audit;
+mod commands;
 mod config;
 mod gpu;
 mod lms;
@@ -53,6 +55,14 @@ impl Drop for TtyGuard {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("glim {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if std::env::args().any(|a| a == "--help" || a == "-h") {
+        println!("Glim — Aurora terminal interface\n\nUsage: glim [--help] [--version]\nCtrl+K actions  ? help  Ctrl+C quit");
+        return Ok(());
+    }
     let found = theme::find_omarchy();
     let config_path = config::config_path();
     let cfg = config::Config::load(&config_path);
@@ -60,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         Some((_, theme, path)) => (Some(theme), Some(path)),
         None => (None, None),
     };
-    let theme = theme::resolve(omarchy.as_ref());
+    let theme = theme::resolve(&cfg.theme, omarchy.as_ref());
     let (tx, mut rx) = unbounded_channel();
     if let Some(path) = watch {
         let theme_tx = tx.clone();
@@ -72,9 +82,15 @@ async fn main() -> anyhow::Result<()> {
     app::spawn_poller(cfg, tx);
 
     enable_raw_mode().context("failed to put the terminal in raw mode")?;
+    let _guard = TtyGuard;
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        previous(info);
+    }));
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
         .context("failed to enter the alternate screen")?;
-    let _guard = TtyGuard;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut reader = EventStream::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(50));

@@ -63,7 +63,10 @@ pub fn parse_daemon(text: &str) -> Option<Daemon> {
 }
 
 pub fn pid_alive(pid: u32) -> bool {
-    Path::new("/proc").join(pid.to_string()).join("stat").is_file()
+    Path::new("/proc")
+        .join(pid.to_string())
+        .join("stat")
+        .is_file()
 }
 
 pub fn port_open(host: &str, port: u16) -> bool {
@@ -106,7 +109,10 @@ pub fn parse_server_status(raw: &str) -> ServerStatus {
     let text = raw.trim();
     if let Ok(data) = serde_json::from_str::<Value>(text) {
         return ServerStatus {
-            running: data.get("running").and_then(Value::as_bool).unwrap_or(false),
+            running: data
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             port: data.get("port").and_then(Value::as_u64).unwrap_or(0) as u16,
         };
     }
@@ -130,7 +136,9 @@ pub fn parse_ps(raw: &str) -> Result<Vec<LoadedModel>, String> {
         return Ok(Vec::new());
     }
     let data: Value = serde_json::from_str(text).map_err(|err| err.to_string())?;
-    let list = data.as_array().ok_or_else(|| "lms ps JSON was not an array".to_string())?;
+    let list = data
+        .as_array()
+        .ok_or_else(|| "lms ps JSON was not an array".to_string())?;
     Ok(list
         .iter()
         .map(|m| {
@@ -139,10 +147,7 @@ pub fn parse_ps(raw: &str) -> Result<Vec<LoadedModel>, String> {
                 .or_else(|| m["modelKey"].as_str())
                 .unwrap_or("")
                 .to_string();
-            let display = m["displayName"]
-                .as_str()
-                .unwrap_or(&identifier)
-                .to_string();
+            let display = m["displayName"].as_str().unwrap_or(&identifier).to_string();
             let vram = m["vramBytes"]
                 .as_u64()
                 .or_else(|| m["gpuMemoryBytes"].as_u64())
@@ -176,7 +181,9 @@ pub fn parse_ls(raw: &str) -> Result<Vec<Installed>, String> {
         return Ok(Vec::new());
     }
     let data: Value = serde_json::from_str(text).map_err(|err| err.to_string())?;
-    let list = data.as_array().ok_or_else(|| "lms ls JSON was not an array".to_string())?;
+    let list = data
+        .as_array()
+        .ok_or_else(|| "lms ls JSON was not an array".to_string())?;
     Ok(list
         .iter()
         .filter_map(|m| {

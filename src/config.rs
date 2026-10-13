@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_theme")]
+    pub theme: String,
     #[serde(default = "default_host")]
     pub ollama_host: String,
     #[serde(default)]
@@ -15,6 +17,10 @@ pub struct Config {
     pub gpu_poll_ms: u64,
     #[serde(default = "default_model_poll")]
     pub model_poll_ms: u64,
+}
+
+fn default_theme() -> String {
+    "aurora".into()
 }
 
 fn default_host() -> String {
@@ -32,6 +38,7 @@ fn default_model_poll() -> u64 {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            theme: default_theme(),
             ollama_host: default_host(),
             lms_path: String::new(),
             vram_budget_mib: 0,
@@ -46,7 +53,19 @@ impl Config {
         let Ok(text) = std::fs::read_to_string(path) else {
             return Self::default();
         };
-        toml::from_str(&text).unwrap_or_default()
+        let mut cfg: Self = toml::from_str(&text).unwrap_or_default();
+        if !crate::theme::known(&cfg.theme) {
+            cfg.theme = crate::theme::fallback_id(false).into();
+        }
+        cfg
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, toml::to_string_pretty(self).unwrap_or_default())
     }
 
     pub fn lms_bin(&self) -> PathBuf {
@@ -104,5 +123,18 @@ mod tests {
         let mut cfg = Config::default();
         cfg.ollama_host = "127.0.0.1:11434".into();
         assert_eq!(cfg.host(), "http://127.0.0.1:11434");
+    }
+}
+
+#[cfg(test)]
+mod aurora_persistence {
+    use super::*;
+    #[test]
+    fn defaults_and_explicit_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert_eq!(Config::default().theme, "aurora");
+        std::fs::write(&path, "theme = \"terminal\"\n").unwrap();
+        assert_eq!(Config::load(&path).theme, "terminal");
     }
 }

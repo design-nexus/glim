@@ -31,17 +31,26 @@ pub struct ProcInfo {
 
 impl ProcInfo {
     pub fn is_llama_server(&self) -> bool {
-        self.comm == "llama-server" || self.cmdline.split_whitespace().any(|p| p.ends_with("llama-server"))
+        self.comm == "llama-server"
+            || self
+                .cmdline
+                .split_whitespace()
+                .any(|p| p.ends_with("llama-server"))
     }
 
     pub fn is_run_as_service(&self) -> bool {
-        self.cmdline.split_whitespace().any(|p| p == "--run-as-service")
+        self.cmdline
+            .split_whitespace()
+            .any(|p| p == "--run-as-service")
             && (self.comm.contains("lm-studio") || self.cmdline.contains("lm-studio"))
     }
 
     pub fn looks_ollama(&self) -> bool {
         self.comm == "ollama"
-            || self.cmdline.split_whitespace().any(|p| p.ends_with("ollama"))
+            || self
+                .cmdline
+                .split_whitespace()
+                .any(|p| p.ends_with("ollama"))
     }
 
     pub fn looks_lmstudio(&self) -> bool {
@@ -112,7 +121,11 @@ pub fn parse_stat(stat: &str) -> Option<(u32, String)> {
     Some((ppid, comm))
 }
 
-pub fn classify(proc: &ProcInfo, by_pid: &HashMap<u32, ProcInfo>, daemon_pid: Option<u32>) -> Stack {
+pub fn classify(
+    proc: &ProcInfo,
+    by_pid: &HashMap<u32, ProcInfo>,
+    daemon_pid: Option<u32>,
+) -> Stack {
     let ancestors = ancestor_chain(proc, by_pid);
     let has_ollama = proc.looks_ollama() || ancestors.iter().any(|p| p.looks_ollama());
     let has_lms = proc.looks_lmstudio() || ancestors.iter().any(|p| p.looks_lmstudio());
@@ -149,7 +162,10 @@ pub fn classify(proc: &ProcInfo, by_pid: &HashMap<u32, ProcInfo>, daemon_pid: Op
     Stack::Other
 }
 
-pub fn ancestor_chain<'a>(proc: &ProcInfo, by_pid: &'a HashMap<u32, ProcInfo>) -> Vec<&'a ProcInfo> {
+pub fn ancestor_chain<'a>(
+    proc: &ProcInfo,
+    by_pid: &'a HashMap<u32, ProcInfo>,
+) -> Vec<&'a ProcInfo> {
     let mut out = Vec::new();
     let mut pid = proc.ppid;
     let mut guard = 0;
@@ -222,9 +238,10 @@ mod tests {
 
     #[test]
     fn parses_stat_with_spaces_in_comm() {
-        let (ppid, comm) =
-            parse_stat("370180 (lm studio) S 1 370180 370180 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0")
-                .unwrap();
+        let (ppid, comm) = parse_stat(
+            "370180 (lm studio) S 1 370180 370180 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0",
+        )
+        .unwrap();
         assert_eq!(ppid, 1);
         assert_eq!(comm, "lm studio");
     }
@@ -234,7 +251,12 @@ mod tests {
         let procs = vec![
             proc(1, 0, "systemd", "/usr/lib/systemd/systemd"),
             proc(80, 1, "ollama", "/usr/bin/ollama serve"),
-            proc(81, 80, "llama-server", "/usr/bin/ollama runner llama-server"),
+            proc(
+                81,
+                80,
+                "llama-server",
+                "/usr/bin/ollama runner llama-server",
+            ),
         ];
         let by = map(&procs);
         assert_eq!(classify(&procs[2], &by, None), Stack::Ollama);
@@ -277,8 +299,18 @@ mod tests {
     fn appimage_parent_of_daemon_is_lmstudio() {
         let procs = vec![
             proc(1, 0, "systemd", "/usr/lib/systemd/systemd"),
-            proc(370184, 1, "lm-studio", "/opt/lm-studio/lm-studio.AppImage --run-as-service"),
-            proc(370180, 370184, "lm-studio", "/tmp/.mount_lm-stu/lm-studio --run-as-service"),
+            proc(
+                370184,
+                1,
+                "lm-studio",
+                "/opt/lm-studio/lm-studio.AppImage --run-as-service",
+            ),
+            proc(
+                370180,
+                370184,
+                "lm-studio",
+                "/tmp/.mount_lm-stu/lm-studio --run-as-service",
+            ),
         ];
         let by = map(&procs);
         assert_eq!(classify(&procs[1], &by, Some(370180)), Stack::LmStudio);

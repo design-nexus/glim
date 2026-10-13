@@ -56,7 +56,9 @@ pub fn sample() -> (Gpu, Vec<ComputeApp>) {
         ])
         .output()
     {
-        Ok(output) if output.status.success() => parse_apps(&String::from_utf8_lossy(&output.stdout)),
+        Ok(output) if output.status.success() => {
+            parse_apps(&String::from_utf8_lossy(&output.stdout))
+        }
         _ => Vec::new(),
     };
     (gpu, apps)
@@ -133,10 +135,7 @@ fn split_csv(line: &str) -> Vec<String> {
 }
 
 fn parse_num(text: &str) -> u64 {
-    let cleaned: String = text
-        .chars()
-        .filter(|ch| ch.is_ascii_digit())
-        .collect();
+    let cleaned: String = text.chars().filter(|ch| ch.is_ascii_digit()).collect();
     cleaned.parse().unwrap_or(0)
 }
 
@@ -190,10 +189,8 @@ mod tests {
 
     #[test]
     fn parses_nounits_gpu_row() {
-        let gpu = parse_gpu(
-            "NVIDIA GeForce RTX 5080 Laptop GPU, 16303, 2, 15932, 13, 46, 18.79\n",
-        )
-        .unwrap();
+        let gpu = parse_gpu("NVIDIA GeForce RTX 5080 Laptop GPU, 16303, 2, 15932, 13, 46, 18.79\n")
+            .unwrap();
         assert_eq!(gpu.name, "NVIDIA GeForce RTX 5080 Laptop GPU");
         assert_eq!(gpu.total_mib, 16303);
         assert_eq!(gpu.used_mib, 2);

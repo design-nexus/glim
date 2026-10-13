@@ -1,4 +1,6 @@
-# vramtui
+# Glim
+
+![Glim Aurora interface](docs/screenshot.png)
 
 GPU landlord for local inference. One terminal screen for the VRAM that **Ollama** and **LM Studio** share.
 
@@ -19,13 +21,14 @@ This is not a chat UI and not a bar plugin.
 | `o` | Start or stop Ollama |
 | `m` | Start or stop the LM Studio server |
 | `x` | Kill the selected orphan (confirm) |
-| `R` | Replay the pixel wordmark |
+| `Tab` | Toggle model list / inspector |
+| `Ctrl+K` | Search actions and select a theme |
 | `?` | Help |
 | `q` | Quit |
 
 Click a tenant row to select it. Scroll the wheel to move.
 
-The header is the design-nex.us pixel wordmark: pink → purple → indigo, drawn in then shimmering. GPU gauges, stacked VRAM, stack cards, and an inspector sit above the tenant table.
+A compact Glim header sits above the VRAM occupancy meter, stack cards, and model list. Tab opens the scrollable inspector.
 
 ## Safety
 
@@ -38,6 +41,7 @@ Ollama is probed over HTTP (`/api/ps`). Start/stop uses systemd when the unit is
 `~/.config/vramtui/config.toml`
 
 ```toml
+theme = "aurora"
 ollama_host = "http://127.0.0.1:11434"
 lms_path = ""          # default ~/.lmstudio/bin/lms
 vram_budget_mib = 0    # 0 = total minus 2048
@@ -45,11 +49,17 @@ gpu_poll_ms = 1000
 model_poll_ms = 2000
 ```
 
-Theme follows the live Omarchy `colors.toml` when present (background and text), with design-nex.us pink/cyan/magenta on the chrome. Without Omarchy it uses the site palette (`#181922` / `#ff79c6` / `#8be9fd`). The wordmark gradient is always the site gradient.
+Aurora is the default. Choose Follow Omarchy or Terminal through Ctrl+K; the choice is saved in the existing config file.
 
 ## Install
 
 ```bash
 ./install.sh
-vramtui
+glim
 ```
+
+## Aurora interface
+
+New installations use Aurora: charcoal surfaces, lavender focus, cyan data, quiet borders, and compact headers. Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab changes focus where panes are available. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×10.
+
+Build requirements: Rust 1.88 or newer, Ratatui 0.30.2, Crossterm 0.29. Run `cargo test --locked` before `./install.sh`. The command is `glim`; no compatibility command aliases are installed.

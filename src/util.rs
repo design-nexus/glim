@@ -6,14 +6,14 @@ pub fn human_mib(mib: u64) -> String {
     if mib >= 1024 {
         let gib = mib as f64 / 1024.0;
         if gib >= 10.0 {
-            format!("{gib:.0}G")
+            format!("{gib:.0} GiB")
         } else {
-            format!("{gib:.1}G")
+            format!("{gib:.1} GiB")
         }
     } else if mib == 0 {
         "0".into()
     } else {
-        format!("{mib}M")
+        format!("{mib} MiB")
     }
 }
 
@@ -92,8 +92,8 @@ mod tests {
     #[test]
     fn mib_rounding() {
         assert_eq!(bytes_to_mib(7151067268), 6819);
-        assert_eq!(human_mib(6819), "6.7G");
-        assert_eq!(human_mib(16), "16M");
+        assert_eq!(human_mib(6819), "6.7 GiB");
+        assert_eq!(human_mib(16), "16 MiB");
     }
 
     #[test]

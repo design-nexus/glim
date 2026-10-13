@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build vramtui and install the binary.
+# Build glim and install the binary.
 # From a clone:  ./install.sh
 # Optional:      ./install.sh --prefix "$HOME/.local"
 
 set -euo pipefail
 
 PREFIX="${HOME}/.local"
-REPO="https://github.com/design-nexus/vramtui.git"
+REPO="https://github.com/design-nexus/glim.git"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       echo "Usage: install.sh [--prefix DIR]"
-      echo "Installs the vramtui binary into DIR/bin. Default DIR is ~/.local."
+      echo "Installs the glim binary into DIR/bin. Default DIR is ~/.local."
       exit 0
       ;;
     *)
@@ -46,29 +46,29 @@ source_dir=""
 script_path="${BASH_SOURCE[0]:-}"
 if [[ -n "$script_path" && -f "$script_path" ]]; then
   candidate="$(cd "$(dirname "$script_path")" && pwd)"
-  if [[ -f "$candidate/Cargo.toml" ]] && grep -q 'name = "vramtui"' "$candidate/Cargo.toml"; then
+  if [[ -f "$candidate/Cargo.toml" ]] && grep -q 'name = "glim"' "$candidate/Cargo.toml"; then
     source_dir="$candidate"
   fi
 fi
 
 if [[ -z "$source_dir" ]]; then
   if ! command -v git >/dev/null 2>&1; then
-    echo "git was not found, and this script is not inside a vramtui checkout." >&2
+    echo "git was not found, and this script is not inside a glim checkout." >&2
     exit 1
   fi
   CLONE_DIR="$(mktemp -d)"
   echo "Cloning $REPO"
-  git clone --depth 1 "$REPO" "$CLONE_DIR/vramtui"
-  source_dir="$CLONE_DIR/vramtui"
+  git clone --depth 1 "$REPO" "$CLONE_DIR/glim"
+  source_dir="$CLONE_DIR/glim"
 fi
 
 echo "Building release binary"
-cargo build --release --manifest-path "$source_dir/Cargo.toml"
+cargo build --release --locked --manifest-path "$source_dir/Cargo.toml"
 
 install -d "$PREFIX/bin"
-install -m 755 "$source_dir/target/release/vramtui" "$PREFIX/bin/vramtui"
+install -m 755 "$source_dir/target/release/glim" "$PREFIX/bin/glim"
 
-echo "Installed $PREFIX/bin/vramtui"
+echo "Installed $PREFIX/bin/glim"
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *)
@@ -76,4 +76,4 @@ case ":$PATH:" in
     echo "  export PATH=\"$PREFIX/bin:\$PATH\""
     ;;
 esac
-echo "Run: vramtui"
+echo "Run: glim"
