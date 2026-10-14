@@ -1,6 +1,6 @@
 # Glim
 
-![Glim Aurora interface](docs/screenshot.png)
+![Glim interface](docs/screenshot.png)
 
 GPU landlord for local inference. One terminal screen for the VRAM that **Ollama** and **LM Studio** share.
 
@@ -58,9 +58,9 @@ Aurora is the default. Choose Follow Omarchy or Terminal through Ctrl+K; the cho
 glim
 ```
 
-## Aurora interface
+## Interface
 
-New installations use Aurora: charcoal surfaces, lavender focus, cyan data, quiet borders, and compact headers. Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab / Shift+Tab changes screens; F6 / Shift+F6 changes panes. F2 opens Navigation. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×14.
+Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab / Shift+Tab changes screens; F6 / Shift+F6 changes panes. F2 opens Navigation. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×14.
 
 Build requirements: Rust 1.88 or newer, Ratatui 0.30.2, Crossterm 0.29. Run `cargo test --locked` before `./install.sh`. The command is `glim`; no compatibility command aliases are installed.
 
